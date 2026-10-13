@@ -1,0 +1,11 @@
+[project]
+name = "online-class-backend"
+version = "0.1.0"
+description = "Backend for the online classes platform"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.0",
+    "psycopg[binary]>=3.3.6",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.0",
+]
