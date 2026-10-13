@@ -4,6 +4,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
+    
+    admin_email: str | None = None
+    admin_password: str | None = None
+    admin_full_name: str = "Administrator"
 
 
 settings = Settings()
