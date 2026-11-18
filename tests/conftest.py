@@ -1,7 +1,9 @@
 from collections.abc import Callable, Iterator
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -11,9 +13,19 @@ from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import User, UserRole
+from app.models import (
+    ClassSession, Course, CourseSchedule, SessionStatus, Teacher, User, UserRole,
+)
 
 TEST_PASSWORD = "Password123"
+
+
+class TestSettings(BaseSettings):
+    """Test-only settings, read from the same .env but kept out of the app's Settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    test_database_url: str | None = None
 
 
 def _test_database_url() -> str:
@@ -21,7 +33,7 @@ def _test_database_url() -> str:
 
     The suite drops every table, so pointing it at the dev database would wipe it.
     """
-    url = settings.test_database_url
+    url = TestSettings().test_database_url
     if not url:
         pytest.exit("TEST_DATABASE_URL is not set in .env", returncode=1)
     test_db = make_url(url).database or ""
@@ -108,3 +120,82 @@ def make_user(db: Session) -> Callable[..., User]:
 
 def login(client: TestClient, email: str, password: str = TEST_PASSWORD):
     return client.post("/api/v1/auth/login", json={"email": email, "password": password})
+
+
+@pytest.fixture
+def make_teacher(db: Session, make_user) -> Callable[..., Teacher]:
+    def _make_teacher(title: str = "Lecturer", is_active: bool = True, **user_kwargs) -> Teacher:
+        user = make_user(role=UserRole.TEACHER, is_active=is_active, **user_kwargs)
+        teacher = Teacher(user=user, title=title)
+        db.add(teacher)
+        db.commit()
+        return teacher
+
+    return _make_teacher
+
+
+@pytest.fixture
+def admin_client(client: TestClient, make_user) -> TestClient:
+    """The test client, logged in as an admin."""
+    admin = make_user(role=UserRole.ADMIN)
+    assert login(client, admin.email).status_code == 200
+    return client
+
+
+@pytest.fixture
+def make_course(db: Session) -> Callable[..., Course]:
+    """A course running from a month ago to three months ahead, published by default."""
+    counter = 0
+
+    def _make_course(
+        teacher: Teacher,
+        code: str | None = None,
+        is_published: bool = True,
+        schedules: list[tuple[int, time, str]] = (),  # (day_of_week, start_time, timezone)
+        **fields,
+    ) -> Course:
+        nonlocal counter
+        counter += 1
+        today = date.today()
+        course = Course(
+            code=code or f"C{counter:03d}",
+            title=fields.pop("title", f"Course {counter}"),
+            teacher=teacher,
+            is_published=is_published,
+            starts_on=fields.pop("starts_on", today - timedelta(days=30)),
+            ends_on=fields.pop("ends_on", today + timedelta(days=90)),
+            schedules=[
+                CourseSchedule(day_of_week=d, start_time=t, duration_minutes=60, timezone=tz)
+                for d, t, tz in schedules
+            ],
+            **fields,
+        )
+        db.add(course)
+        db.commit()
+        return course
+
+    return _make_course
+
+
+@pytest.fixture
+def make_session(db: Session) -> Callable[..., ClassSession]:
+    def _make_session(
+        course: Course,
+        status: SessionStatus = SessionStatus.SCHEDULED,
+        scheduled_for: datetime | None = None,
+        title: str = "Class",
+    ) -> ClassSession:
+        session = ClassSession(course=course, status=status, scheduled_for=scheduled_for,
+                               title=title)
+        db.add(session)
+        db.commit()
+        return session
+
+    return _make_session
+
+
+def login_as(client: TestClient, user: User) -> TestClient:
+    """Switch the client to `user`'s session (dropping any previous one)."""
+    client.cookies.clear()
+    assert login(client, user.email).status_code == 200
+    return client

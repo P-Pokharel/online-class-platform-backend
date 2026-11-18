@@ -53,6 +53,21 @@ def get_current_user(claims: TokenClaims, db: DbSession) -> User:
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def get_optional_user(request: Request, db: DbSession) -> User | None:
+    """For public endpoints: the logged-in user, or None for anonymous visitors.
+
+    A missing, expired or otherwise invalid cookie just means "anonymous" here,
+    never a 401, so a stale cookie can't break public pages.
+    """
+    try:
+        return get_current_user(get_token_claims(request), db)
+    except HTTPException:
+        return None
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
+
+
 def require_audience(audience: str) -> Callable[..., User]:
     """Build a dependency that allows only tokens issued for `audience`.
 
